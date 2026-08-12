@@ -1,0 +1,34 @@
+{
+  "name": "@otisworks/rabbit-hole-squad",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A 5-agent pipeline that researches obscure topics and writes weird, compelling essays",
+  "main": "agent-team.js",
+  "bin": {
+    "rabbit-hole-squad": "./agent-team.js"
+  },
+  "scripts": {
+    "start": "node agent-team.js",
+    "run": "node agent-team.js"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "anthropic",
+    "claude",
+    "essay",
+    "research",
+    "multi-agent",
+    "llm"
+  ],
+  "author": "otisworks",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/otisworks/rabbit-hole-squad"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "openai": "^4.77.0"
+  }
+}
