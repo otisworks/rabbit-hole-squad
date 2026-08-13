@@ -1,6 +1,6 @@
 {
   "name": "@otisworks/rabbit-hole-squad",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "description": "A 5-agent pipeline that researches obscure topics and writes weird, compelling essays",
   "main": "agent-team.js",
