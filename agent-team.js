@@ -20,7 +20,7 @@ const CONFIG = {
   },
   openai: {
     apiKey: process.env.OPENAI_API_KEY,
-    model: process.env.OPENAI_MODEL || "gpt-4o",
+    model: process.env.OPENAI_MODEL || "gpt-5.6-terra",
   },
   maxTokens: 16384,
 };
@@ -71,6 +71,15 @@ Committed to keeping the vibe alive while staying defensible.`,
     background: `Digital artist, photographer, and visual thinker. 
 Understands how visuals create mood, guide readers through complex ideas, and reinforce connections. 
 Thinks in mood boards, visual metaphors, and reference collections.`,
+  },
+
+  editor: {
+    name: "Editor",
+    role: "Final Polish Specialist",
+    goal: "Take the draft essay and fact-checker feedback to produce a corrected, polished final version that's ready to publish.",
+    background: `Experienced editor who respects the writer's voice while fixing errors and improving clarity.
+Knows when to incorporate fact-check corrections and when to soften speculative claims.
+Preserves the weirdness and energy while making the piece bulletproof.`,
   },
 };
 
@@ -286,8 +295,49 @@ Think about:
 Create a visual blueprint that could guide the design or illustration of the finished essay.`,
     expectedOutput: `Visual recommendations organized by essay section. For each visual: description, 
 placement in the text, narrative purpose, mood/style notes, and 2-3 reference examples.`,
+    optional: "visuals", // Can be skipped with --no-visuals
+  },
+
+  {
+    id: "edit",
+    agent: "editor",
+    description: (inputs, results) => `You have the original essay draft:
+
+${results.write}
+
+And the fact-checker's feedback:
+
+${results.factcheck}
+
+Your job is to produce the FINAL, POLISHED VERSION of this essay.
+
+Incorporate the fact-checker's corrections and suggestions:
+- Fix any factual errors that were identified
+- Soften or qualify speculative claims as recommended
+- Add citations or attributions where flagged
+- Strengthen arguments where better evidence was suggested
+- Lean into the weirdness where the fact-checker said we could go harder
+
+DO NOT sanitize the piece. Preserve the voice, the energy, the tangents that work.
+
+The goal is an essay that is:
+- Factually defensible
+- Properly qualified where speculative
+- Still weird, engaging, and voice-forward
+- Ready to publish
+
+Output the complete revised essay in markdown format.`,
+    expectedOutput: `Final polished essay in markdown format. All fact-check corrections incorporated, 
+speculative claims properly qualified, voice and weirdness preserved. Ready to publish.`,
+    optional: "editor", // Can be skipped with --raw
   },
 ];
+
+// Task flags for optional steps
+const OPTIONAL_TASKS = {
+  visuals: true,  // included by default
+  editor: true,   // included by default
+};
 
 // ============================================
 // LLM CLIENT
@@ -329,7 +379,7 @@ Stay in character. Be thorough and specific.`;
   } else {
     const response = await client.chat.completions.create({
       model: CONFIG.openai.model,
-      max_tokens: CONFIG.maxTokens,
+      max_completion_tokens: CONFIG.maxTokens,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: prompt },
@@ -340,10 +390,10 @@ Stay in character. Be thorough and specific.`;
 }
 
 /**
- * Call LLM with web search capability (Anthropic only)
+ * Call Anthropic with web search capability
  * Uses an agentic loop to handle tool calls
  */
-async function callLLMWithSearch(client, agent, prompt, verbose = true) {
+async function callAnthropicWithSearch(client, agent, prompt, verbose = true) {
   const systemPrompt = `You are ${agent.name}, a ${agent.role}.
 
 Your goal: ${agent.goal}
@@ -354,12 +404,6 @@ Stay in character. Be thorough and specific.
 
 You have access to web search. Use it to find information, verify facts, and discover obscure sources.
 Search multiple times with different queries to get comprehensive results.`;
-
-  if (CONFIG.provider !== "anthropic") {
-    // Fall back to simple call for OpenAI (no native web search)
-    console.log("  (Web search only available with Anthropic, skipping...)");
-    return callLLMSimple(client, agent, prompt);
-  }
 
   // Anthropic's server-side web search tool
   const tools = [
@@ -410,7 +454,6 @@ Search multiple times with different queries to get comprehensive results.`;
 
     // Process each tool use - for web_search, Anthropic handles it server-side
     // We just need to continue the conversation
-    const toolResults = [];
     for (const toolUse of toolUseBlocks) {
       if (toolUse.name === "web_search") {
         searchCount++;
@@ -429,6 +472,49 @@ Search multiple times with different queries to get comprehensive results.`;
 }
 
 /**
+ * Call OpenAI with web search capability
+ * Uses the responses API with web_search tool
+ */
+async function callOpenAIWithSearch(client, agent, prompt, verbose = true) {
+  const systemPrompt = `You are ${agent.name}, a ${agent.role}.
+
+Your goal: ${agent.goal}
+
+Background: ${agent.background}
+
+Stay in character. Be thorough and specific.
+
+You have access to web search. Use it to find information, verify facts, and discover obscure sources.
+Search multiple times with different queries to get comprehensive results.`;
+
+  const fullPrompt = `${systemPrompt}\n\n${prompt}`;
+
+  if (verbose) {
+    console.log(`  [Web Search enabled via OpenAI]`);
+  }
+
+  const response = await client.responses.create({
+    model: CONFIG.openai.model,
+    tools: [{ type: "web_search" }],
+    input: fullPrompt,
+  });
+
+  return response.output_text;
+}
+
+/**
+ * Call LLM with web search capability
+ * Routes to appropriate provider implementation
+ */
+async function callLLMWithSearch(client, agent, prompt, verbose = true) {
+  if (CONFIG.provider === "anthropic") {
+    return callAnthropicWithSearch(client, agent, prompt, verbose);
+  } else {
+    return callOpenAIWithSearch(client, agent, prompt, verbose);
+  }
+}
+
+/**
  * Main LLM call function - routes to appropriate handler
  */
 async function callLLM(client, agent, prompt, useWebSearch = false, verbose = true) {
@@ -439,21 +525,55 @@ async function callLLM(client, agent, prompt, useWebSearch = false, verbose = tr
 }
 
 // ============================================
+// CLI ARGUMENT PARSING
+// ============================================
+
+function parseArgs(args) {
+  const flags = {
+    raw: false,        // --raw: skip editor
+    noVisuals: false,  // --no-visuals: skip palette
+    topic: null,
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--raw") {
+      flags.raw = true;
+    } else if (arg === "--no-visuals") {
+      flags.noVisuals = true;
+    } else if (!arg.startsWith("-")) {
+      flags.topic = arg;
+    }
+  }
+
+  return flags;
+}
+
+// ============================================
 // TEAM RUNNER
 // ============================================
 
 async function runTeam(inputs, options = {}) {
-  const { verbose = true, onTaskStart, onTaskComplete } = options;
+  const { verbose = true, onTaskStart, onTaskComplete, skipEditor = false, skipVisuals = false } = options;
   const client = createClient();
   const results = {};
+
+  // Determine which tasks to run
+  const activeTasks = tasks.filter((task) => {
+    if (task.optional === "editor" && skipEditor) return false;
+    if (task.optional === "visuals" && skipVisuals) return false;
+    return true;
+  });
 
   console.log(`\n${"=".repeat(60)}`);
   console.log(`RABBIT HOLE ESSAY SQUADRON`);
   console.log(`Provider: ${CONFIG.provider.toUpperCase()}`);
   console.log(`Topic: ${inputs.topic}`);
+  if (skipEditor) console.log(`Mode: RAW (skipping final editor)`);
+  if (skipVisuals) console.log(`Mode: NO VISUALS (skipping palette)`);
   console.log(`${"=".repeat(60)}\n`);
 
-  for (const task of tasks) {
+  for (const task of activeTasks) {
     const agent = agents[task.agent];
     const taskPrompt = task.description(inputs, results);
 
@@ -500,12 +620,18 @@ async function runTeam(inputs, options = {}) {
 // ============================================
 
 async function main() {
+  const args = process.argv.slice(2);
+  const flags = parseArgs(args);
+
   const topic =
-    process.argv[2] ||
+    flags.topic ||
     "The intersection of Banksy and punk music, through a philosophical lens.";
 
   try {
-    const results = await runTeam({ topic });
+    const results = await runTeam(
+      { topic },
+      { skipEditor: flags.raw, skipVisuals: flags.noVisuals }
+    );
 
     // Save outputs
     const fs = await import("fs/promises");
@@ -514,11 +640,19 @@ async function main() {
 
     await fs.mkdir(outputDir, { recursive: true });
 
+    // Always save core outputs
     await fs.writeFile(`${outputDir}/1-research.md`, results.research);
     await fs.writeFile(`${outputDir}/2-narrative.md`, results.connect);
     await fs.writeFile(`${outputDir}/3-essay.md`, results.write);
     await fs.writeFile(`${outputDir}/4-factcheck.md`, results.factcheck);
-    await fs.writeFile(`${outputDir}/5-visuals.md`, results.visuals);
+
+    // Save optional outputs if they exist
+    if (results.visuals) {
+      await fs.writeFile(`${outputDir}/5-visuals.md`, results.visuals);
+    }
+    if (results.edit) {
+      await fs.writeFile(`${outputDir}/6-final-essay.md`, results.edit);
+    }
 
     console.log(`\nOutputs saved to: ${outputDir}/`);
   } catch (error) {
