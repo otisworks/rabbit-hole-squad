@@ -5,7 +5,7 @@
   "description": "A 5-agent pipeline that researches obscure topics and writes weird, compelling essays",
   "main": "agent-team.js",
   "bin": {
-    "rabbit-hole-squad": "./agent-team.js"
+    "rabbit-hole-squad": "agent-team.js"
   },
   "scripts": {
     "start": "node agent-team.js",
@@ -25,7 +25,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/otisworks/rabbit-hole-squad"
+    "url": "git+https://github.com/otisworks/rabbit-hole-squad.git"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
