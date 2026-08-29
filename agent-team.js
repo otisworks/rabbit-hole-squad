@@ -2,7 +2,7 @@
  * Simple Multi-Agent Team Runner
  * No framework BS - just agents, tasks, and results.
  * 
- * Supports: Anthropic (default) or OpenAI
+ * Supports: Anthropic (default), OpenAI, OpenRouter, or DeepSeek
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -13,7 +13,7 @@ import OpenAI from "openai";
 // ============================================
 
 const CONFIG = {
-  provider: process.env.LLM_PROVIDER || "anthropic", // "anthropic" or "openai"
+  provider: process.env.LLM_PROVIDER || "anthropic", // "anthropic", "openai", "openrouter", or "deepseek"
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY,
     model: process.env.ANTHROPIC_MODEL || "claude-sonnet-5",
@@ -21,6 +21,16 @@ const CONFIG = {
   openai: {
     apiKey: process.env.OPENAI_API_KEY,
     model: process.env.OPENAI_MODEL || "gpt-5.6-terra",
+  },
+  openrouter: {
+    apiKey: process.env.OPENROUTER_API_KEY,
+    model: process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4",
+    baseURL: "https://openrouter.ai/api/v1",
+  },
+  deepseek: {
+    apiKey: process.env.DEEPSEEK_API_KEY,
+    model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
+    baseURL: "https://api.deepseek.com",
   },
   maxTokens: 16384,
 };
@@ -346,6 +356,20 @@ const OPTIONAL_TASKS = {
 function createClient() {
   if (CONFIG.provider === "anthropic") {
     return new Anthropic({ apiKey: CONFIG.anthropic.apiKey });
+  } else if (CONFIG.provider === "openrouter") {
+    return new OpenAI({
+      apiKey: CONFIG.openrouter.apiKey,
+      baseURL: CONFIG.openrouter.baseURL,
+      defaultHeaders: {
+        "HTTP-Referer": "https://github.com/otisworks/rabbit-hole-squad",
+        "X-Title": "Rabbit Hole Squad",
+      },
+    });
+  } else if (CONFIG.provider === "deepseek") {
+    return new OpenAI({
+      apiKey: CONFIG.deepseek.apiKey,
+      baseURL: CONFIG.deepseek.baseURL,
+    });
   } else {
     return new OpenAI({ apiKey: CONFIG.openai.apiKey });
   }
@@ -376,6 +400,26 @@ Stay in character. Be thorough and specific.`;
       throw new Error(`No text in response. Got: ${JSON.stringify(response.content.map(b => b.type))}`);
     }
     return textBlocks.map((b) => b.text).join("\n");
+  } else if (CONFIG.provider === "openrouter") {
+    const response = await client.chat.completions.create({
+      model: CONFIG.openrouter.model,
+      max_tokens: CONFIG.maxTokens,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt },
+      ],
+    });
+    return response.choices[0].message.content;
+  } else if (CONFIG.provider === "deepseek") {
+    const response = await client.chat.completions.create({
+      model: CONFIG.deepseek.model,
+      max_tokens: CONFIG.maxTokens,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt },
+      ],
+    });
+    return response.choices[0].message.content;
   } else {
     const response = await client.chat.completions.create({
       model: CONFIG.openai.model,
@@ -503,12 +547,78 @@ Search multiple times with different queries to get comprehensive results.`;
 }
 
 /**
+ * Call OpenRouter - web search not natively supported
+ * Falls back to standard completion with a note about search limitations
+ */
+async function callOpenRouterWithSearch(client, agent, prompt, verbose = true) {
+  const systemPrompt = `You are ${agent.name}, a ${agent.role}.
+
+Your goal: ${agent.goal}
+
+Background: ${agent.background}
+
+Stay in character. Be thorough and specific.
+
+Note: Web search is not available through OpenRouter. Use your training knowledge to provide the most accurate and comprehensive information possible. Be clear about any limitations in your knowledge.`;
+
+  if (verbose) {
+    console.log(`  [Web Search NOT available via OpenRouter - using model knowledge]`);
+  }
+
+  const response = await client.chat.completions.create({
+    model: CONFIG.openrouter.model,
+    max_tokens: CONFIG.maxTokens,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  return response.choices[0].message.content;
+}
+
+/**
+ * Call DeepSeek - web search not natively supported
+ * Falls back to standard completion with a note about search limitations
+ */
+async function callDeepSeekWithSearch(client, agent, prompt, verbose = true) {
+  const systemPrompt = `You are ${agent.name}, a ${agent.role}.
+
+Your goal: ${agent.goal}
+
+Background: ${agent.background}
+
+Stay in character. Be thorough and specific.
+
+Note: Web search is not available through DeepSeek. Use your training knowledge to provide the most accurate and comprehensive information possible. Be clear about any limitations in your knowledge.`;
+
+  if (verbose) {
+    console.log(`  [Web Search NOT available via DeepSeek - using model knowledge]`);
+  }
+
+  const response = await client.chat.completions.create({
+    model: CONFIG.deepseek.model,
+    max_tokens: CONFIG.maxTokens,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  return response.choices[0].message.content;
+}
+
+/**
  * Call LLM with web search capability
  * Routes to appropriate provider implementation
  */
 async function callLLMWithSearch(client, agent, prompt, verbose = true) {
   if (CONFIG.provider === "anthropic") {
     return callAnthropicWithSearch(client, agent, prompt, verbose);
+  } else if (CONFIG.provider === "openrouter") {
+    return callOpenRouterWithSearch(client, agent, prompt, verbose);
+  } else if (CONFIG.provider === "deepseek") {
+    return callDeepSeekWithSearch(client, agent, prompt, verbose);
   } else {
     return callOpenAIWithSearch(client, agent, prompt, verbose);
   }
